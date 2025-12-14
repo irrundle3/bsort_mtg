@@ -1,0 +1,8 @@
+# conda environment.yaml
+name: bsort
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.13
+  - invoke
