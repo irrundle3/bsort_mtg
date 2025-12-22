@@ -6,3 +6,6 @@ channels:
 dependencies:
   - python=3.13
   - invoke
+  - asyncpg
+  - pydantic
+  - requests

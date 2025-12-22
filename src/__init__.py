@@ -1,0 +1,1 @@
+APP_NAME = "mtg_db_app"
