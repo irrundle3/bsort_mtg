@@ -156,10 +156,21 @@ class PriceFormats:
     paper: Optional[Dict[SourceName, PriceList]] = None
 
 @dataclass
-class PriceInfo:
+class PriceInfoRaw:
+    """Temporary dataclass for price info before normalization (with source_name and currency strings)."""
     card_id: str
     source_name: str
     currency: str
+    price_type: str  # 'buylist' or 'retail'
+    finish_type: str  # 'etched', 'foil', or 'normal'
+    date_priced: date  # Date object
+    price: float
+
+@dataclass
+class PriceInfo:
+    card_id: str
+    source_id: int  # Foreign key to price_source table
+    currency_id: int  # Foreign key to currency table
     price_type: str  # 'buylist' or 'retail'
     finish_type: str  # 'etched', 'foil', or 'normal'
     date_priced: date  # Date object

@@ -209,3 +209,4 @@ __marimo__/
 # PROJECT-SPECIFIC
 data/
 .idea/
+.DS_Store

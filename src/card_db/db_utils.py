@@ -1,10 +1,12 @@
-from typing import Generic, TypeVar, Type, Collection, List
+from typing import Generic, TypeVar, Type, Collection, List, Iterator, Optional
 from dataclasses import fields, is_dataclass, asdict
 import asyncpg
 from .const import DB_PORT, DB_NAME, DB_USER, DB_HOST
+from .lookup_tables import LookupTableCache
+from mtg_json.loader import MTGJsonLoader
+from common import PriceInfo, PriceInfoRaw
 import os
 import logging
-import datetime as dt
 import json
 
 logger = logging.getLogger(__name__)
@@ -77,6 +79,7 @@ class DBSpecialist(Generic[RowType]):
 class CardDBClient:
     def __init__(self):
         self._conn: asyncpg.Connection | None = None
+        self._lookup_cache: LookupTableCache | None = None
 
     async def __aenter__(self) -> "CardDBClient":
         await self.connect_to_db()
@@ -97,12 +100,17 @@ class CardDBClient:
             if os.getenv("DB_PASSWORD")
             else "postgres",
         )
+        # Initialize and load lookup cache when connecting
+        if self._lookup_cache is None:
+            self._lookup_cache = LookupTableCache(self)
+            await self._lookup_cache.load()
         return self._conn
 
     async def disconnect_from_db(self) -> None:
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
+        self._lookup_cache = None
 
     async def execute_query(self, query: str, params: tuple = ()) -> list[dict]:
         # asyncpg uses $1, $2, etc. for parameters
@@ -245,3 +253,58 @@ class CardDBClient:
             logger.warning(f"Failed to query JSONB columns for table {table}: {e}. Will not auto-convert.")
             # Return empty set - we'll only convert if we know the column is JSONB
             return set()
+    
+    async def reload_lookup_cache(self) -> None:
+        """
+        Reload the lookup table cache from the database.
+        This should be called if there's a chance that lookup tables have changed.
+        """
+        if self._lookup_cache is not None:
+            await self._lookup_cache.load()
+    
+    @property
+    def lookup_cache(self) -> LookupTableCache:
+        """
+        Get the lookup table cache.
+        Raises RuntimeError if the client is not connected.
+        """
+        if self._lookup_cache is None:
+            raise RuntimeError("Lookup cache not initialized. Connect to database first.")
+        return self._lookup_cache
+    
+    async def load_historical_price_records(
+        self, 
+        existing_card_ids: Optional[set[str]] = None,
+        mtgjson_dir: Optional[str] = None
+    ) -> Iterator[PriceInfo]:
+        """
+        Load historical prices from AllPrices.json and yield PriceInfo records.
+        This uses a generator to handle the large file (1.5GB) without loading it all into memory.
+        The records are automatically normalized using the lookup cache.
+        
+        Args:
+            existing_card_ids: Optional set of card IDs to filter by. If None, includes all cards.
+            mtgjson_dir: Optional directory containing MTGJSON data files. If None, uses default.
+        
+        Yields:
+            PriceInfo records (normalized with source_id and currency_id) one at a time
+        """
+        if self._lookup_cache is None:
+            raise RuntimeError("Lookup cache not initialized. Connect to database first.")
+        
+        loader = MTGJsonLoader(mtgjson_dir=mtgjson_dir)
+        
+        for raw_record in loader.load_historical_price_records(existing_card_ids):
+            # Normalize the record using the lookup cache
+            source_id = await self._lookup_cache.get_or_create_source_id(raw_record.source_name)
+            currency_id = await self._lookup_cache.get_or_create_currency_id(raw_record.currency)
+            
+            yield PriceInfo(
+                card_id=raw_record.card_id,
+                source_id=source_id,
+                currency_id=currency_id,
+                price_type=raw_record.price_type,
+                finish_type=raw_record.finish_type,
+                date_priced=raw_record.date_priced,
+                price=raw_record.price
+            )
